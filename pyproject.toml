@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "ipykernel>=7.1.0",
     "kagglehub[hf-datasets,pandas-datasets]>=0.3.13",
     "numpy>=2.3.5",
     "scikit-learn>=1.7.2",
