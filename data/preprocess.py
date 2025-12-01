@@ -1,29 +1,32 @@
-import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
+import numpy as np
 
 
 def make_data_splits(
     df: pd.DataFrame,
     train_size: float = 0.70,
     val_size: float = 0.15,
-    test_size: float = 0.15,
     seed: int = 123,
-    reset_index: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Default 70-15-15 train-val-test split
+    """
 
-    shuffled_df = df.sample(frac=1, random_state=seed).reset_index(drop=reset_index)
+    n = len(df)
+    rng = np.random.default_rng(seed)
+    idx = np.arange(n)
+    rng.shuffle(idx)
 
-    # For a 70-15-15 train-val-test split
-    # 70% train - 30% val/test split
-    df_train, df_test = train_test_split(
-        shuffled_df, test_size=1 - train_size, random_state=seed
-    )
-    # (0.15 / 0.30 = 0.5) -> 50% split between val/test to give us
-    # 70-15-15 split
-    df_val, df_test = train_test_split(
-        df_test, test_size=test_size / (test_size + val_size), random_state=seed
-    )
+    n_train = int(train_size * n)
+    n_val = int(val_size * n)
+
+    train_indices = idx[:n_train]
+    val_indices = idx[n_train : n_train + n_val]
+    test_indices = idx[n_train + n_val :]
+
+    df_train = df.iloc[train_indices]
+    df_val = df.iloc[val_indices]
+    df_test = df.iloc[test_indices]
 
     print(f"Train: {len(df_train)}")
     print(f"Val: {len(df_val)}")
