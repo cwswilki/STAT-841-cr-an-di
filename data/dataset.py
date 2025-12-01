@@ -7,16 +7,13 @@ import torch
 from torch.utils.data import Dataset
 
 
-class MalwareDataset(Dataset):
+import pandas as pd
+import numpy as np
 
-    _df_cache: Optional[pd.DataFrame] = None
 
-    @classmethod
-    def load_df(cls, reload: bool = False) -> pd.DataFrame:
-        if cls._df_cache is not None and not reload:
-            print("Returning cached dataframe")
-            return cls._df_cache
+class MalwareDatasetLoader:
 
+    def __init__(self):
         print("Downloading and loading kaggle dataset...")
 
         path = kagglehub.dataset_download(
@@ -31,20 +28,54 @@ class MalwareDataset(Dataset):
                 dataframes.append(pd.read_csv(full_path, sep="|"))
 
         df = pd.concat(dataframes, ignore_index=True)
+        df = df.replace("-", np.nan)
 
-        cls._df_cache = df
-        return df
+        self.df = df
 
-    def __init__(self):
-        if self._df_cache is not None:
-            df = self.load_df()
-        pass
+    def make_data_splits(
+        self,
+        train_size: float = 0.70,
+        val_size: float = 0.15,
+        seed: int = 123,
+    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """
+        Default 70-15-15 train-val-test split
+        """
+
+        n = len(self.df)
+        rng = np.random.default_rng(seed)
+        idx = np.arange(n)
+        rng.shuffle(idx)
+
+        n_train = int(train_size * n)
+        n_val = int(val_size * n)
+
+        train_indices = idx[:n_train]
+        val_indices = idx[n_train : n_train + n_val]
+        test_indices = idx[n_train + n_val :]
+
+        df_train = self.df.iloc[train_indices]
+        df_val = self.df.iloc[val_indices]
+        df_test = self.df.iloc[test_indices]
+
+        print(f"Train: {len(df_train)}")
+        print(f"Val: {len(df_val)}")
+        print(f"Test: {len(df_test)}")
+
+        return df_train, df_val, df_test
+
+
+class MalwareDataset(Dataset):
+    def __init__(self, X, y):
+        super().__init__()
+
+        self.X = torch.tensor(X, dtype=torch.float32)
+        self.y = torch.tensor(y, dtype=torch.float32)
 
     def __len__(self):
-        if self._df_cache is None:
-            raise ValueError("dataframe does not exist but should")
+        return self.X.shape[0]
 
-        return len(self._df_cache)
-
-    def __getitem__(self, idx: int):
-        pass
+    def __getitem__(self, idx):
+        x = self.X[idx]
+        y = self.y[idx]
+        return x, y
