@@ -102,30 +102,71 @@ model_3l= DNN(input_dim=X_train.shape[1], hidden_dims=[512, 256], output_dim=1)
 model_2l_dropout= DNN(input_dim=X_train.shape[1], hidden_dims=[512], output_dim=1, dropout=0.5)
 model_3l_dropout = DNN(input_dim=X_train.shape[1], hidden_dims=[512, 256], output_dim=1, dropout=0.5)
 
-models = [model_2l, model_3l, model_2l_dropout, model_3l_dropout]
+# models = [model_2l, model_3l, model_2l_dropout, model_3l_dropout]
 
-for m in models:
-    print("Training with model...")
-    print(m)
-    print("---\n")
+# for m in models:
+#     print("Training with model...")
+#     print(m)
+#     print("---\n")
 
-    learning_rate=1e-2
-    optimizer = optim.SGD(m.parameters(), lr=learning_rate) # optimizer
+#     learning_rate=1e-2
+#     optimizer = optim.SGD(m.parameters(), lr=learning_rate) # optimizer
 
-    trainer = Trainer(
-        m,
-        optimizer,
-        batch_size=BATCH_SIZE,
-        learning_rate=learning_rate,
-        num_epochs=4,
-        check_val_every_n_epoch=2,
-        device=device
-    )
+#     trainer = Trainer(
+#         m,
+#         optimizer,
+#         batch_size=BATCH_SIZE,
+#         learning_rate=learning_rate,
+#         num_epochs=30,
+#         check_val_every_n_epoch=5,
+#         device=device
+#     )
 
-    trainer.train(train_dataloader, val_dataloader)
-    trainer.test(test_dataloader)
-    trainer.plot_metrics()
+#     trainer.train(train_dataloader, val_dataloader)
+#     trainer.test(test_dataloader)
+#     trainer.plot_metrics()
 
-    del m
-    del optimizer
-    del trainer
+#     del m
+#     del optimizer
+#     del trainer
+
+
+models = [
+    ("2-layer", model_2l),
+    ("3-layer", model_3l),
+    ("2-layer-dropout", model_2l_dropout),
+    ("3-layer-dropout", model_3l_dropout),
+]
+
+learning_rates = [1e-4, 1e-3, 1e-2]
+
+for model_name, model in models:
+    print(f"\n##### Model: {model_name} #####")
+    model_results = []
+
+    for lr in learning_rates:
+        print(f"\n=== {model_name} with lr = {lr} ===")
+        optimizer = optim.SGD(model.parameters(), lr=lr)
+
+        trainer = Trainer(
+            model,
+            optimizer,
+            batch_size=BATCH_SIZE,
+            learning_rate=lr,
+            num_epochs=1,
+            check_val_every_n_epoch=1,
+            device=device,
+        )
+
+        trainer.train(train_dataloader, val_dataloader)
+        test_acc = trainer.test(test_dataloader)
+        trainer.plot_metrics()
+
+        model_results.append((lr, test_acc))
+
+        del optimizer, trainer
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+            
+    best_lr, best_acc = max(model_results, key=lambda x: x[1])
+    print(f"Best lr for {model_name}: {best_lr} (val acc = {best_acc})")

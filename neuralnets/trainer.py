@@ -125,7 +125,7 @@ class Trainer:
                     f"[EPOCH {epoch + 1}] LOSS : train={avg_loss} val={avg_vloss} | ACCURACY : train={train_accuracy} val={val_accuracy}"
                 )
 
-    def test(self, test_dataloader: DataLoader) -> None:
+    def test(self, test_dataloader: DataLoader) -> float:
         """Test the ResNet-18 Model"""
 
         correct = 0
@@ -137,14 +137,15 @@ class Trainer:
                 correct += self.__accuracy(outputs, labels)
 
         self.logger.info(f"Test accuracy: {(correct / len(test_dataloader)) * 100} %")
+        return correct / len(test_dataloader)
 
     def plot_metrics(self) -> None:
         """Create plots for model metrics"""
 
-        os.makedirs("plots", exist_ok=True)  # create plots dir
+        os.makedirs("neuralnets/plots", exist_ok=True)  # create plots dir
 
         t_iters, t_loss = list(zip(*self.train_losses))
-        _, v_loss = list(zip(*self.val_losses))
+        v_iters, v_loss = list(zip(*self.val_losses))
         _, acc = list(zip(*self.train_accuracies))
         _, v_acc = list(zip(*self.val_accuracies))
 
@@ -153,7 +154,7 @@ class Trainer:
 
         ax[0].set_title(f"Loss Curve (batch_size={self.batch_size}, lr={self.learning_rate})")
         ax[0].plot(t_iters, t_loss)
-        ax[0].plot(t_iters, v_loss)
+        ax[0].plot(v_iters, v_loss)
         ax[0].set_xlabel("Epochs")
         ax[0].set_ylabel("Loss")
         ax[0].legend(["Train", "Validation"])
@@ -161,7 +162,7 @@ class Trainer:
 
         ax[1].set_title(f"Accuracy Curve (batch_size={self.batch_size}, lr={self.learning_rate})")
         ax[1].plot(t_iters, acc)
-        ax[1].plot(t_iters, v_acc)
+        ax[1].plot(v_iters, v_acc)
         ax[1].set_xlabel("Epochs")
         ax[1].set_ylabel("Accuracy")
         ax[1].legend(["Train", "Validation"])
