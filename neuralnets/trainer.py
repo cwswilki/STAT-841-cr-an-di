@@ -54,7 +54,7 @@ class Trainer:
         logging.basicConfig(stream=sys.stdout, level=logging.INFO, format="%(levelname)s | %(message)s")
         self.logger = logging.getLogger()
 
-    def train(self, train_dataloader: DataLoader, val_dataloader: DataLoader) -> None:
+    def train(self, train_dataloader: DataLoader, val_dataloader: DataLoader, log_progress:bool) -> None:
         """Train the ResNet-18 Model"""
 
         for epoch in range(self.num_epochs):
@@ -66,7 +66,10 @@ class Trainer:
             batch_loss = 0.0
             running_acc = 0.0
 
-            pbar = tqdm(enumerate(train_dataloader), total=len(train_dataloader))
+            if log_progress:
+                pbar = tqdm(enumerate(train_dataloader), total=len(train_dataloader))
+            else:
+                pbar = enumerate(train_dataloader)
 
             for i, (inputs, labels) in pbar:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
@@ -90,7 +93,8 @@ class Trainer:
                 batch_loss += loss.item()
                 if i % 10 == 0:
                     batch_loss = batch_loss / 10  # loss per batch
-                    pbar.set_postfix({"loss": round(batch_loss, 5)})
+                    if log_progress:
+                        pbar.set_postfix({"loss": round(batch_loss, 5)})
                     batch_loss = 0.0
 
             self.scheduler.step()
@@ -105,7 +109,11 @@ class Trainer:
                 self.model.eval()  # set model to evaluation
                 with torch.no_grad():
                     running_val_acc = 0
-                    for inputs, labels in val_dataloader:
+                    if log_progress:
+                        pbar = tqdm(val_dataloader)
+                    else:
+                        pbar = val_dataloader
+                    for inputs, labels in pbar:
                         inputs, labels = inputs.to(self.device), labels.to(self.device)
 
                         outputs = self.model(inputs)
