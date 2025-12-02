@@ -54,7 +54,7 @@ class Trainer:
         logging.basicConfig(stream=sys.stdout, level=logging.INFO, format="%(levelname)s | %(message)s")
         self.logger = logging.getLogger()
 
-    def train(self, train_dataloader: DataLoader, val_dataloader: DataLoader, log_progress:bool) -> None:
+    def train(self, train_dataloader: DataLoader, val_dataloader: DataLoader, experiment_description="", log_progress:bool=True) -> None:
         """Train the ResNet-18 Model"""
 
         for epoch in range(self.num_epochs):
@@ -130,7 +130,7 @@ class Trainer:
                 self.val_losses.append((epoch, avg_vloss))
 
                 self.logger.info(
-                    f"[EPOCH {epoch + 1}] LOSS : train={avg_loss} val={avg_vloss} | ACCURACY : train={train_accuracy} val={val_accuracy}"
+                    f"{experiment_description}\n[EPOCH {epoch + 1}] LOSS : train={avg_loss} val={avg_vloss} | ACCURACY : train={train_accuracy} val={val_accuracy}"
                 )
 
     def test(self, test_dataloader: DataLoader) -> float:

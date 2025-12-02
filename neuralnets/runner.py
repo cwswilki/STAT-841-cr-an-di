@@ -55,7 +55,7 @@ def training_run(input_dim,
         device=device,
     )
 
-    trainer.train(train_dataloader, val_dataloader, log_progress=log_progress)
+    trainer.train(train_dataloader, val_dataloader, desc, log_progress=log_progress)
     val_acc = trainer.test(val_dataloader)
     trainer.plot_metrics()
 
