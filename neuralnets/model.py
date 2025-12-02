@@ -6,7 +6,8 @@ class DNN(nn.Module):
                 input_dim: int, 
                 hidden_dims: list[int] = [512],
                 output_dim: int = 10,
-                dropout: float = 0.0
+                dropout: float = 0.0,
+                activation_type: str = "relu",
         ):
         super().__init__()
         layers = []
@@ -15,7 +16,10 @@ class DNN(nn.Module):
         for h in hidden_dims:
             layers.append(nn.Linear(prev_dim, h))
             layers.append(nn.BatchNorm1d(h))
-            layers.append(nn.ReLU())
+            if activation_type == 'relu':
+                layers.append(nn.ReLU())
+            elif activation_type == 'sigmoid':
+                layers.append(nn.Sigmoid())
 
             if dropout > 0.0:
                 layers.append(nn.Dropout(dropout))

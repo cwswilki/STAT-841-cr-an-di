@@ -9,9 +9,10 @@ from torch.utils.data import DataLoader
 
 import torch
 import torch.optim as optim
+import multiprocessing
+import concurrent
 
-from model import DNN
-from trainer import Trainer
+from runner import training_run
 
 loader = MalwareDatasetLoader()
 df_train, df_val, df_test = loader.make_data_splits()
@@ -58,19 +59,6 @@ def process_data(df, using_train_data):
     y = y.reshape(-1, 1)
     return X, y
 
-def get_device():
-    """Get available device"""
-
-    if torch.cuda.is_available():
-        print("Using CUDA...")
-        return torch.device("cuda")
-    elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
-        print("Using MPS...")
-        return torch.device("mps")
-    else:
-        print("Using CPU...")
-        return torch.device("cpu")
-
 X_train, y_train = process_data(df_train, using_train_data=True)
 X_val, y_val = process_data(df_val, using_train_data=False)
 X_test, y_test = process_data(df_test, using_train_data=False)
@@ -84,89 +72,69 @@ train_ds = MalwareDataset(X_train, y_train)
 val_ds = MalwareDataset(X_val, y_val)
 test_ds = MalwareDataset(X_test, y_test)
 
-BATCH_SIZE = 4096
+BATCH_SIZE = 1024*64
 
 train_dataloader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=False)
 val_dataloader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
 test_dataloader = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False)
 
-device = get_device()
-
-# 2 class output -> malware or benign
-
-# no dropout
-model_2l= DNN(input_dim=X_train.shape[1], hidden_dims=[512], output_dim=1)
-model_3l= DNN(input_dim=X_train.shape[1], hidden_dims=[512, 256], output_dim=1)
-
-# with dropout
-model_2l_dropout= DNN(input_dim=X_train.shape[1], hidden_dims=[512], output_dim=1, dropout=0.5)
-model_3l_dropout = DNN(input_dim=X_train.shape[1], hidden_dims=[512, 256], output_dim=1, dropout=0.5)
-
-# models = [model_2l, model_3l, model_2l_dropout, model_3l_dropout]
-
-# for m in models:
-#     print("Training with model...")
-#     print(m)
-#     print("---\n")
-
-#     learning_rate=1e-2
-#     optimizer = optim.SGD(m.parameters(), lr=learning_rate) # optimizer
-
-#     trainer = Trainer(
-#         m,
-#         optimizer,
-#         batch_size=BATCH_SIZE,
-#         learning_rate=learning_rate,
-#         num_epochs=30,
-#         check_val_every_n_epoch=5,
-#         device=device
-#     )
-
-#     trainer.train(train_dataloader, val_dataloader)
-#     trainer.test(test_dataloader)
-#     trainer.plot_metrics()
-
-#     del m
-#     del optimizer
-#     del trainer
+if torch.cuda.is_available():
+   multiprocessing.set_start_method('spawn', force=True)
+   print("Multiprocessing start method set to 'spawn' for CUDA compatibility.")
 
 
-models = [
-    ("2-layer", model_2l),
-    ("3-layer", model_3l),
-    ("2-layer-dropout", model_2l_dropout),
-    ("3-layer-dropout", model_3l_dropout),
-]
+from neuralnets.runner import training_run
+import concurrent
 
-learning_rates = [1e-4, 1e-3, 1e-2]
+PARALLEL=False
+NUM_WORKERS = 1
+accuracies = []
+futures = []
+with concurrent.futures.ProcessPoolExecutor(max_workers=NUM_WORKERS) as executor:
+   for weight_decay in [0, 0.0001, 0.001, 0.01, 0.1]:
+       for dropout in [0, 0.1, 0.5]:
+           for initial_lr in [1, 1e-1, 1e-3, 1e-5]:
+               for optim_type in ["adamw", "sgd"]:
+                   for activation_type in ["relu", "sigmoid"]:
+                       for layers in [[512], [512, 256], [512 for _ in range(5)]]:
+                           if optim_type == "sgd" and weight_decay != 0:
+                               continue
+                           desc = (f"Optimizer: {optim_type} - Weight Decay: {weight_decay} - Dropout: {dropout}"
+                                f" - initial LR: {initial_lr} - act: {activation_type} - layers: {layers}")
+                           print(f"SCHEDULING: {desc}")
+                           if PARALLEL:
+                               futures.append(executor.submit(training_run,
+                                                              X_train.shape[1],
+                                                              BATCH_SIZE,
+                                                              train_dataloader,
+                                                              val_dataloader,
+                                                              test_dataloader,
+                                                              weight_decay, dropout, initial_lr,
+                                               optim_type, activation_type, layers, log_progress=False,
+                                               ))
+                           else:
+                               result = training_run(X_train.shape[1],
+                                                     BATCH_SIZE,
+                                                           train_dataloader,
+                                                           val_dataloader,
+                                                            test_dataloader,
+                                                           weight_decay, dropout, initial_lr, optim_type,
+                                   activation_type, layers)
+                               accuracies.append(result)
 
-for model_name, model in models:
-    print(f"\n##### Model: {model_name} #####")
-    model_results = []
 
-    for lr in learning_rates:
-        print(f"\n=== {model_name} with lr = {lr} ===")
-        optimizer = optim.SGD(model.parameters(), lr=lr)
-
-        trainer = Trainer(
-            model,
-            optimizer,
-            batch_size=BATCH_SIZE,
-            learning_rate=lr,
-            num_epochs=10,
-            check_val_every_n_epoch=3,
-            device=device,
-        )
-
-        trainer.train(train_dataloader, val_dataloader)
-        test_acc = trainer.test(test_dataloader)
-        trainer.plot_metrics()
-
-        model_results.append((lr, test_acc))
-
-        del optimizer, trainer
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
-            
-    best_lr, best_acc = max(model_results, key=lambda x: x[1])
-    print(f"Best lr for {model_name}: {best_lr} (val acc = {best_acc})")
+CATCH_EXCEPTIONS=False
+if CATCH_EXCEPTIONS:
+   for future in concurrent.futures.as_completed(futures):
+       try:
+           result = future.result()
+           print(f"FINISHED RESULT: {result}")
+           if result is not None:
+               accuracies.append(result)
+       except Exception as e:
+           print(e)
+else:
+   for future in concurrent.futures.as_completed(futures):
+       result = future.result()
+       if result is not None:
+           accuracies.append(result)

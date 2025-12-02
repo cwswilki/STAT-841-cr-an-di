@@ -175,3 +175,4 @@ class Trainer:
         probs = torch.sigmoid(outputs)
         preds = (probs >= self.threshold).int()
         return (torch.sum(preds == labels) / len(preds)).item()
+    

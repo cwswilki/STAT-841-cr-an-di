@@ -69,8 +69,10 @@ class MalwareDataset(Dataset):
     def __init__(self, X, y):
         super().__init__()
 
-        self.X = torch.tensor(X, dtype=torch.float32)
-        self.y = torch.tensor(y, dtype=torch.float32)
+        self.X = torch.as_tensor(X, dtype=torch.float32)
+        self.y = torch.as_tensor(y, dtype=torch.float32)
+        self.X.share_memory_()
+        self.y.share_memory_()
 
     def __len__(self):
         return self.X.shape[0]
