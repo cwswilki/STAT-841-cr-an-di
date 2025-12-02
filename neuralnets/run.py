@@ -153,8 +153,8 @@ for model_name, model in models:
             optimizer,
             batch_size=BATCH_SIZE,
             learning_rate=lr,
-            num_epochs=1,
-            check_val_every_n_epoch=1,
+            num_epochs=10,
+            check_val_every_n_epoch=3,
             device=device,
         )
 

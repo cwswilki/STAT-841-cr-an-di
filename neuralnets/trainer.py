@@ -168,7 +168,7 @@ class Trainer:
         ax[1].legend(["Train", "Validation"])
         ax[1].set_xticks(t_iters)
 
-        fig.savefig(f"plots/{self.model_name}_metrics.png")
+        fig.savefig(f"neuralnets/plots/{self.model_name}_metrics.png")
         plt.show()
 
     def __accuracy(self, outputs: torch.Tensor, labels: torch.Tensor) -> float:
