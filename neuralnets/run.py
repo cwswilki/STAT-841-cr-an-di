@@ -1,4 +1,4 @@
-from dataset import MalwareDatasetLoader, MalwareDataset
+from data.dataset import MalwareDatasetLoader, MalwareDataset
 import pandas as pd
 import numpy as np
 from sklearn.compose import ColumnTransformer
@@ -12,7 +12,8 @@ import torch.optim as optim
 import multiprocessing
 import concurrent
 
-from runner import training_run
+from neuralnets.model import DNN
+from neuralnets.trainer import Trainer
 
 loader = MalwareDatasetLoader()
 df_train, df_val, df_test = loader.make_data_splits()
@@ -67,14 +68,20 @@ print(X_train.shape, y_train.shape)
 print(X_val.shape, y_val.shape)
 print(X_test.shape, y_test.shape)
 
-
+IN_FEATURES = X_train.shape[1]
 train_ds = MalwareDataset(X_train, y_train)
 val_ds = MalwareDataset(X_val, y_val)
 test_ds = MalwareDataset(X_test, y_test)
 
+del loader 
+del df_test, df_val, df_train
+del X_train, y_train, X_val, y_val, X_test, y_test
+import gc
+gc.collect()
+
 BATCH_SIZE = 1024*64
 
-train_dataloader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=False)
+train_dataloader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, pin_memory=True)
 val_dataloader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
 test_dataloader = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False)
 
@@ -82,59 +89,54 @@ if torch.cuda.is_available():
    multiprocessing.set_start_method('spawn', force=True)
    print("Multiprocessing start method set to 'spawn' for CUDA compatibility.")
 
-
-from neuralnets.runner import training_run
-import concurrent
-
-PARALLEL=False
-NUM_WORKERS = 1
+PARALLEL=True
+NUM_WORKERS = 6
 accuracies = []
 futures = []
 with concurrent.futures.ProcessPoolExecutor(max_workers=NUM_WORKERS) as executor:
-   for weight_decay in [0, 0.0001, 0.001, 0.01, 0.1]:
-       for dropout in [0, 0.1, 0.5]:
-           for initial_lr in [1, 1e-1, 1e-3, 1e-5]:
-               for optim_type in ["adamw", "sgd"]:
-                   for activation_type in ["relu", "sigmoid"]:
-                       for layers in [[512], [512, 256], [512 for _ in range(5)]]:
-                           if optim_type == "sgd" and weight_decay != 0:
-                               continue
-                           desc = (f"Optimizer: {optim_type} - Weight Decay: {weight_decay} - Dropout: {dropout}"
-                                f" - initial LR: {initial_lr} - act: {activation_type} - layers: {layers}")
-                           print(f"SCHEDULING: {desc}")
-                           if PARALLEL:
-                               futures.append(executor.submit(training_run,
-                                                              X_train.shape[1],
-                                                              BATCH_SIZE,
-                                                              train_dataloader,
-                                                              val_dataloader,
-                                                              test_dataloader,
-                                                              weight_decay, dropout, initial_lr,
-                                               optim_type, activation_type, layers, log_progress=False,
-                                               ))
-                           else:
-                               result = training_run(X_train.shape[1],
-                                                     BATCH_SIZE,
-                                                           train_dataloader,
-                                                           val_dataloader,
-                                                            test_dataloader,
-                                                           weight_decay, dropout, initial_lr, optim_type,
-                                   activation_type, layers)
-                               accuracies.append(result)
-
+    for initial_lr in [1, 1e-1, 1e-3, 1e-5]:
+        for weight_decay in [0, 0.0001, 0.001, 0.01, 0.1]:
+            for dropout in [0, 0.1, 0.5]:
+                for optim_type in ["adamw", "sgd"]:
+                    for activation_type in ["sigmoid", "relu"]:
+                        for layers in [[512 for _ in range(12)], [512], [512, 256], ]:
+                            if optim_type == "sgd" and weight_decay != 0:
+                                continue
+                            desc = (f"Optimizer: {optim_type} - Weight Decay: {weight_decay} - Dropout: {dropout}"
+                                 f" - initial LR: {initial_lr} - act: {activation_type} - layers: {layers}")
+                            print(f"SCHEDULING: {desc}")
+                            if PARALLEL:
+                                futures.append(executor.submit(training_run,
+                                                               IN_FEATURES,
+                                                               BATCH_SIZE,
+                                                               train_dataloader,
+                                                               val_dataloader,
+                                                               test_dataloader,
+                                                               weight_decay, dropout, initial_lr,
+                                                optim_type, activation_type, layers, log_progress=False,
+                                                ))
+                            else:
+                                result = training_run(IN_FEATURES,
+                                                      BATCH_SIZE,
+                                                            train_dataloader,
+                                                            val_dataloader,
+                                                             test_dataloader,
+                                                            weight_decay, dropout, initial_lr, optim_type,
+                                    activation_type, layers)
+                                accuracies.append(result)
 
 CATCH_EXCEPTIONS=False
 if CATCH_EXCEPTIONS:
-   for future in concurrent.futures.as_completed(futures):
-       try:
-           result = future.result()
-           print(f"FINISHED RESULT: {result}")
-           if result is not None:
-               accuracies.append(result)
-       except Exception as e:
-           print(e)
+    for future in concurrent.futures.as_completed(futures):
+        try:
+            result = future.result()
+            print(f"FINISHED RESULT: {result}")
+            if result is not None:
+                accuracies.append(result)
+        except Exception as e:
+            print(e)
 else:
-   for future in concurrent.futures.as_completed(futures):
-       result = future.result()
-       if result is not None:
-           accuracies.append(result)
+    for future in concurrent.futures.as_completed(futures):
+        result = future.result()
+        if result is not None:
+            accuracies.append(result)
