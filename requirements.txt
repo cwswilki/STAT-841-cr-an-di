@@ -1,0 +1,24 @@
+# Core Machine Learning & Tensor Operations
+# Note: Code uses torch.compile (PyTorch 2.0+) and AMP
+torch>=2.0.0
+numpy
+
+# Utilities & System
+# Used for progress bars (via ported_yolo_files wrapper)
+tqdm
+# Used for model summary output
+torchinfo
+
+# Metrics & Plotting
+# Required for plotting curves and validation samples
+matplotlib
+# Often required for plotting and data handling in ML pipelines
+pandas
+# Mathematical utilities often required by torchvision/image ops
+scipy
+
+#ipynb
+ipykernel
+
+kagglehub
+scikit-learn
