@@ -1,4 +1,4 @@
-import sys, os
+import os
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import logging
@@ -20,6 +20,7 @@ class Trainer:
         model: nn.Module,
         model_name: str,
         optimizer: optim.Optimizer,
+        logger: logging.Logger,
         batch_size: int = 256,
         learning_rate: float = 0.01,
         num_epochs: int = 30,
@@ -62,21 +63,12 @@ class Trainer:
         )
         out_path = Path(out_dir)
         out_path.mkdir(parents=True, exist_ok=True)
-        log_file = out_path / "train.log"
 
         # plots/ subfolder
         self.plots_dir = out_path / "plots"
         self.plots_dir.mkdir(parents=True, exist_ok=True)
 
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(levelname)s | %(message)s",
-            handlers=[
-                logging.StreamHandler(sys.stdout),
-                logging.FileHandler(log_file, mode="w"),
-            ],
-        )
-        self.logger = logging.getLogger(__name__)
+        self.logger = logger
 
     def train(self, train_dataloader: DataLoader, val_dataloader: DataLoader, val_dataset) -> None:
 
