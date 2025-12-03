@@ -1,0 +1,8 @@
+python neuralnets/run.py --run v1 --learning-rates 1e-4 1e-3 1e-2 --optimizer adam --layers 512 256 --batch-size 1024 --dropout 0.5
+python neuralnets/run.py --run v2 --learning-rates 1e-4 1e-3 1e-2 --optimizer adam --layers 512 256 --batch-size 1024 --dropout 0.0
+python neuralnets/run.py --run v3 --learning-rates 1e-4 1e-3 1e-2 --optimizer sgd --layers 512 256 --batch-size 1024 --dropout 0.5
+python neuralnets/run.py --run v4 --learning-rates 1e-4 1e-3 1e-2 --optimizer sgd --layers 512 256 --batch-size 1024 --dropout 0.0
+python neuralnets/run.py --run v5 --learning-rates 1e-4 1e-3 1e-2 --optimizer adam --layers 512 --batch-size 1024 --dropout 0.5
+python neuralnets/run.py --run v6 --learning-rates 1e-4 1e-3 1e-2 --optimizer adam --layers 512 --batch-size 1024 --dropout 0.0
+python neuralnets/run.py --run v7 --learning-rates 1e-4 1e-3 1e-2 --optimizer sgd --layers 512 --batch-size 1024 --dropout 0.5
+python neuralnets/run.py --run v8 --learning-rates 1e-4 1e-3 1e-2 --optimizer sgd --layers 512 --batch-size 1024 --dropout 0.0

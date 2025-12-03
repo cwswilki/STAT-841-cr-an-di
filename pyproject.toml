@@ -7,9 +7,15 @@ requires-python = ">=3.11"
 dependencies = [
     "ipykernel>=7.1.0",
     "kagglehub[hf-datasets,pandas-datasets]>=0.3.13",
+    "matplotlib>=3.10.7",
     "numpy>=2.3.5",
     "scikit-learn>=1.7.2",
     "torch>=2.9.1",
     "torchvision>=0.24.1",
     "xgboost>=3.1.2",
+]
+
+[dependency-groups]
+dev = [
+    "isort>=7.0.0",
 ]
