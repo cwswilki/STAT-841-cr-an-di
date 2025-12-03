@@ -1,5 +1,4 @@
 import os
-from typing import Optional
 
 import kagglehub
 import pandas as pd
@@ -9,6 +8,12 @@ from torch.utils.data import Dataset
 
 import pandas as pd
 import numpy as np
+
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.model_selection import train_test_split
 
 
 class MalwareDatasetLoader:
@@ -79,3 +84,45 @@ class MalwareDataset(Dataset):
         x = self.X[idx]
         y = self.y[idx]
         return x, y
+
+# local_orig, local_resp have only "-"" values
+SKIPPED_COLUMNS = [
+  'ts', 'uid', 'id.orig_h', 'id.resp_h', 'tunnel_parents', 'detailed-label', 'id.orig_p', 'id.resp_p', 'local_orig', 'local_resp', 'history']
+
+ONE_HOT_COLUMNS = ['proto', 'service', 'conn_state']
+NUMERIC_COLUMNS = [
+   'duration', 'orig_bytes', 'resp_bytes', 'missed_bytes', 'orig_pkts', 'orig_ip_bytes', 'resp_pkts', 'resp_ip_bytes'
+]
+LABEL_COLUMN = 'label'
+
+num_transformer = Pipeline(
+  [
+    ("imputer", SimpleImputer(missing_values=np.nan, strategy="constant", fill_value=-1)),
+    ("scalar", StandardScaler())
+  ]
+)
+cat_transformer = Pipeline(
+  [
+    ("imputer", SimpleImputer(missing_values=np.nan, strategy="most_frequent")),
+    ("encoder", OneHotEncoder(handle_unknown='ignore', sparse_output=False))
+  ]
+)
+
+preprocessor = ColumnTransformer(
+    [("numeric", num_transformer, NUMERIC_COLUMNS),
+    ("categorical", cat_transformer, ONE_HOT_COLUMNS)],
+    remainder='passthrough'
+)
+
+def process_data(df, using_train_data):
+    tmp_df = df[ONE_HOT_COLUMNS + NUMERIC_COLUMNS]
+    # fit only on training data
+    # only transforming for val and test data
+    if using_train_data:
+        X = preprocessor.fit_transform(tmp_df)
+    else:
+        X = preprocessor.transform(tmp_df)
+
+    y = np.where(df[LABEL_COLUMN] == 'Benign', 0, 1)
+    y = y.reshape(-1, 1)
+    return X, y

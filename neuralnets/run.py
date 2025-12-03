@@ -1,162 +1,174 @@
-from dataset import MalwareDatasetLoader, MalwareDataset
-import pandas as pd
-import numpy as np
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.pipeline import Pipeline
-from sklearn.impute import SimpleImputer
-from torch.utils.data import DataLoader
+import argparse
+import os
 
+import numpy as np
 import torch
 import torch.optim as optim
+from torch.utils.data import DataLoader
 
 from model import DNN
 from trainer import Trainer
+from helpers import get_device
+from dataset import MalwareDatasetLoader, MalwareDataset, process_data
 
-loader = MalwareDatasetLoader()
-df_train, df_val, df_test = loader.make_data_splits()
 
-# local_orig, local_resp have only "-"" values
-SKIPPED_COLUMNS = [
-  'ts', 'uid', 'id.orig_h', 'id.resp_h', 'tunnel_parents', 'detailed-label', 'id.orig_p', 'id.resp_p', 'local_orig', 'local_resp']
+CACHE_PATH = "neuralnets/cache/"
+CACHE_DATA_PATH = os.path.join(CACHE_PATH, "data.npz")
 
-ONE_HOT_COLUMNS = ['proto', 'service', 'conn_state', 'history']
-NUMERIC_COLUMNS = [
-   'duration', 'orig_bytes', 'resp_bytes', 'missed_bytes', 'orig_pkts', 'orig_ip_bytes', 'resp_pkts', 'resp_ip_bytes'
-]
-LABEL_COLUMN = 'label'
 
-num_transformer = Pipeline(
-  [
-    ("imputer", SimpleImputer(missing_values=np.nan, strategy="constant", fill_value=-1)),
-    ("scalar", StandardScaler())
-  ]
-)
-cat_transformer = Pipeline(
-  [
-    ("imputer", SimpleImputer(missing_values=np.nan, strategy="most_frequent")),
-    ("encoder", OneHotEncoder(handle_unknown='ignore', sparse_output=False))
-  ]
-)
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train DNN for malware detection")
 
-preprocessor = ColumnTransformer(
-    [("numeric", num_transformer, NUMERIC_COLUMNS),
-    ("categorical", cat_transformer, ONE_HOT_COLUMNS)],
-    remainder='passthrough'
-)
+    parser.add_argument(
+        "--learning-rates",
+        type=float,
+        nargs="+",
+        required=True,
+        help="List of learning rates, e.g. --learning-rates 0.01 0.001",
+    )
+    parser.add_argument(
+        "--optimizer",
+        type=str,
+        choices=["sgd", "adam"],
+        required=True,
+        help="Optimizer to use: sgd or adam",
+    )
+    parser.add_argument(
+        "--layers",
+        type=int,
+        nargs="+",
+        required=True,
+        help="Hidden layer sizes, e.g. --layers 512 256",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        required=True,
+        help="Batch size for training, e.g. --batch-size 512",
+    )
+    parser.add_argument(
+        "--num-epochs",
+        type=int,
+        default=30,
+        help="Number of training epochs",
+    )
+    parser.add_argument(
+        "--check-val-every-n-epoch",
+        type=int,
+        default=5,
+        help="Run validation every N epochs",
+    )
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=0.5,
+        help="Dropout rate (default=0.5)",
+    )
 
-def process_data(df, using_train_data):
-    tmp_df = df[ONE_HOT_COLUMNS + NUMERIC_COLUMNS]
-    # fit only on training data
-    # only transforming for val and test data
-    if using_train_data:
-        X = preprocessor.fit_transform(tmp_df)
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+
+    # === Data loading / preprocessing (with cache) ===
+    if os.path.exists(CACHE_DATA_PATH):
+        print("Loading cached transformed data...")
+        data = np.load(CACHE_DATA_PATH)
+        X_train, y_train = data["X_train"], data["y_train"]
+        X_val, y_val = data["X_val"], data["y_val"]
+        X_test, y_test = data["X_test"], data["y_test"]
     else:
-        X = preprocessor.transform(tmp_df)
+        os.makedirs(CACHE_PATH, exist_ok=True)
+        loader = MalwareDatasetLoader()
+        df_train, df_val, df_test = loader.make_data_splits()
 
-    y = np.where(df[LABEL_COLUMN] == 'Benign', 1, 0)
-    y = y.reshape(-1, 1)
-    return X, y
+        X_train, y_train = process_data(df_train, using_train_data=True)
+        X_val, y_val = process_data(df_val, using_train_data=False)
+        X_test, y_test = process_data(df_test, using_train_data=False)
 
-def get_device():
-    """Get available device"""
+        np.savez(
+            CACHE_DATA_PATH,
+            X_train=X_train,
+            y_train=y_train,
+            X_val=X_val,
+            y_val=y_val,
+            X_test=X_test,
+            y_test=y_test,
+        )
 
-    if torch.cuda.is_available():
-        print("Using CUDA...")
-        return torch.device("cuda")
-    elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
-        print("Using MPS...")
-        return torch.device("mps")
-    else:
-        print("Using CPU...")
-        return torch.device("cpu")
+    # Data sizes
+    print(X_train.shape, y_train.shape)
+    print(X_val.shape, y_val.shape)
+    print(X_test.shape, y_test.shape)
 
-X_train, y_train = process_data(df_train, using_train_data=True)
-X_val, y_val = process_data(df_val, using_train_data=False)
-X_test, y_test = process_data(df_test, using_train_data=False)
+    # Class distribution
+    print(
+        f"\nClass distribution - Train: Benign={np.sum(y_train == 0) / len(y_train):.2%}, "
+        f"Malware={np.sum(y_train == 1) / len(y_train):.2%}"
+    )
+    print(
+        f"Class distribution - Val: Benign={np.sum(y_val == 0) / len(y_val):.2%}, "
+        f"Malware={np.sum(y_val == 1) / len(y_val):.2%}"
+    )
+    print(
+        f"Class distribution - Test: Benign={np.sum(y_test == 0) / len(y_test):.2%}, "
+        f"Malware={np.sum(y_test == 1) / len(y_test):.2%}\n"
+    )
 
-print(X_train.shape, y_train.shape)
-print(X_val.shape, y_val.shape)
-print(X_test.shape, y_test.shape)
+    BATCH_SIZE = args.batch_size
 
+    # Datasets / Dataloaders
+    train_ds = MalwareDataset(X_train[:600000], y_train[:600000])
+    val_ds = MalwareDataset(X_val, y_val)
+    test_ds = MalwareDataset(X_test, y_test)
 
-train_ds = MalwareDataset(X_train, y_train)
-val_ds = MalwareDataset(X_val, y_val)
-test_ds = MalwareDataset(X_test, y_test)
+    train_dataloader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
+    val_dataloader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
+    test_dataloader = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False)
 
-BATCH_SIZE = 4096
+    device = get_device()
 
-train_dataloader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=False)
-val_dataloader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
-test_dataloader = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False)
+    # # Positive weight for class imbalance
+    # num_neg = np.sum(y_train == 0)
+    # num_pos = np.sum(y_train == 1)
+    # pos_weight = torch.tensor([num_neg / num_pos]).to(device)
 
-device = get_device()
-
-# 2 class output -> malware or benign
-
-# no dropout
-model_2l= DNN(input_dim=X_train.shape[1], hidden_dims=[512], output_dim=1)
-model_3l= DNN(input_dim=X_train.shape[1], hidden_dims=[512, 256], output_dim=1)
-
-# with dropout
-model_2l_dropout= DNN(input_dim=X_train.shape[1], hidden_dims=[512], output_dim=1, dropout=0.5)
-model_3l_dropout = DNN(input_dim=X_train.shape[1], hidden_dims=[512, 256], output_dim=1, dropout=0.5)
-
-# models = [model_2l, model_3l, model_2l_dropout, model_3l_dropout]
-
-# for m in models:
-#     print("Training with model...")
-#     print(m)
-#     print("---\n")
-
-#     learning_rate=1e-2
-#     optimizer = optim.SGD(m.parameters(), lr=learning_rate) # optimizer
-
-#     trainer = Trainer(
-#         m,
-#         optimizer,
-#         batch_size=BATCH_SIZE,
-#         learning_rate=learning_rate,
-#         num_epochs=30,
-#         check_val_every_n_epoch=5,
-#         device=device
-#     )
-
-#     trainer.train(train_dataloader, val_dataloader)
-#     trainer.test(test_dataloader)
-#     trainer.plot_metrics()
-
-#     del m
-#     del optimizer
-#     del trainer
-
-
-models = [
-    ("2-layer", model_2l),
-    ("3-layer", model_3l),
-    ("2-layer-dropout", model_2l_dropout),
-    ("3-layer-dropout", model_3l_dropout),
-]
-
-learning_rates = [1e-4, 1e-3, 1e-2]
-
-for model_name, model in models:
-    print(f"\n##### Model: {model_name} #####")
     model_results = []
 
-    for lr in learning_rates:
-        print(f"\n=== {model_name} with lr = {lr} ===")
-        optimizer = optim.SGD(model.parameters(), lr=lr)
+    for lr in args.learning_rates:
+        model = DNN(
+            input_dim=X_train.shape[1],
+            hidden_dims=args.layers,
+            output_dim=1,
+            dropout=args.dropout,
+        ).to(device)
 
+        if args.optimizer.lower() == "sgd":
+            optimizer = optim.SGD(model.parameters(), lr=lr)
+        else:  # adam
+            optimizer = optim.Adam(model.parameters(), lr=lr)
+
+        model_name = f"DNN(hidden={'-'.join([str(h) for h in args.layers])}, dropout={args.dropout}, lr={lr})"
         trainer = Trainer(
-            model,
-            optimizer,
+            model=model,
+            model_name=model_name,
+            optimizer=optimizer,
             batch_size=BATCH_SIZE,
             learning_rate=lr,
-            num_epochs=10,
-            check_val_every_n_epoch=3,
+            num_epochs=args.num_epochs,
+            check_val_every_n_epoch=args.check_val_every_n_epoch,
             device=device,
+            pos_weight=None
         )
+
+        trainer.logger.info(f"\n##### Model: {model_name} #####")
+        trainer.logger.info(f"Learning Rate: {lr}")
+        trainer.logger.info(f"Optimizer: {args.optimizer}")
+        trainer.logger.info(f"Hidden Layers: {args.layers}")
+        trainer.logger.info(f"Batch Size: {args.batch_size}")
+        trainer.logger.info(f"Num Epochs: {args.num_epochs}")
+        trainer.logger.info(f"Dropout: {args.dropout}")
 
         trainer.train(train_dataloader, val_dataloader)
         test_acc = trainer.test(test_dataloader)
@@ -164,9 +176,13 @@ for model_name, model in models:
 
         model_results.append((lr, test_acc))
 
-        del optimizer, trainer
+        del model, optimizer, trainer
         if device.type == "cuda":
             torch.cuda.empty_cache()
-            
+
     best_lr, best_acc = max(model_results, key=lambda x: x[1])
-    print(f"Best lr for {model_name}: {best_lr} (val acc = {best_acc})")
+    print(f"\nBest lr for {model_name}: {best_lr} (test acc = {best_acc})")
+
+
+if __name__ == "__main__":
+    main()
