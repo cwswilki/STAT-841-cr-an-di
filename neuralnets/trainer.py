@@ -4,7 +4,6 @@ from tqdm import tqdm
 import logging
 import copy
 from pathlib import Path
-from datetime import datetime
 
 import torch
 import torch.nn as nn
@@ -155,39 +154,6 @@ class Trainer:
                 self.logger.info(
                     f"[EPOCH {epoch + 1}] LOSS : train={avg_loss} val={avg_vloss} | ACCURACY : train={train_accuracy} val={val_accuracy}"
                 )
-
-                # crit_debug = torch.nn.BCEWithLogitsLoss(reduction="none")
-
-                # self.model.eval()
-                # with torch.no_grad():
-                #     all_losses = []
-                #     all_logits = []
-                #     all_labels = []
-
-                #     for inputs, labels in val_dataloader:
-                #         inputs, labels = inputs.to(self.device), labels.to(self.device).float()
-                #         logits = self.model(inputs).view(-1)
-                #         labels = labels.view(-1)
-                #         per_item = crit_debug(logits, labels)
-
-                #         all_losses.append(per_item.cpu())
-                #         all_logits.append(logits.cpu())
-                #         all_labels.append(labels.cpu())
-
-                # all_losses = torch.cat(all_losses)
-                # all_logits = torch.cat(all_logits)
-                # all_labels = torch.cat(all_labels)
-
-                # topk_vals, topk_idx = torch.topk(all_losses, k=20)
-                # topk_idx = topk_idx.tolist()
-
-                # for i in topk_idx:
-                #     x_i, y_i = val_dataset[i]  # adjust for your dataset type
-                #     print("Index:", i)
-                #     print("Label:", y_i)
-                #     print("Features:", x_i)
-                #     print("Feature max abs:", x_i.abs().max())
-                #     print("-" * 40)
 
                 # Early stopping check
                 if val_accuracy > best_val_acc:
