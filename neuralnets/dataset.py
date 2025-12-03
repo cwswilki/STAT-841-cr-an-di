@@ -13,7 +13,18 @@ from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
-from sklearn.model_selection import train_test_split
+from typing import Optional
+from sklearn.base import BaseEstimator, TransformerMixin
+
+# local_orig, local_resp have only "-"" values
+SKIPPED_COLUMNS = [
+  'ts', 'uid', 'id.orig_h', 'id.resp_h', 'tunnel_parents', 'detailed-label', 'id.orig_p', 'id.resp_p', 'local_orig', 'local_resp', 'history']
+
+ONE_HOT_COLUMNS = ['proto', 'service', 'conn_state']
+NUMERIC_COLUMNS = [
+   'duration', 'orig_bytes', 'resp_bytes', 'missed_bytes', 'orig_pkts', 'orig_ip_bytes', 'resp_pkts', 'resp_ip_bytes'
+]
+LABEL_COLUMN = 'label'
 
 
 class MalwareDatasetLoader:
@@ -34,6 +45,11 @@ class MalwareDatasetLoader:
 
         df = pd.concat(dataframes, ignore_index=True)
         df = df.replace("-", np.nan)
+
+        # convert to numeric
+        # [duration, orig_bytes, resp_bytes] are objects we need to convert to numeric
+        for col in NUMERIC_COLUMNS:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
         self.df = df
 
@@ -85,19 +101,32 @@ class MalwareDataset(Dataset):
         y = self.y[idx]
         return x, y
 
-# local_orig, local_resp have only "-"" values
-SKIPPED_COLUMNS = [
-  'ts', 'uid', 'id.orig_h', 'id.resp_h', 'tunnel_parents', 'detailed-label', 'id.orig_p', 'id.resp_p', 'local_orig', 'local_resp', 'history']
+class QuantileClipper(BaseEstimator, TransformerMixin):
+    """
+    Clips each feature to [lower_q, upper_q] based on train-set quantiles.
+    """
+    def __init__(self, lower_q: float = 0.0, upper_q: float = 0.999):
+        self.lower_q = lower_q
+        self.upper_q = upper_q
+        self.lower_: Optional[np.ndarray] = None
+        self.upper_: Optional[np.ndarray] = None
 
-ONE_HOT_COLUMNS = ['proto', 'service', 'conn_state']
-NUMERIC_COLUMNS = [
-   'duration', 'orig_bytes', 'resp_bytes', 'missed_bytes', 'orig_pkts', 'orig_ip_bytes', 'resp_pkts', 'resp_ip_bytes'
-]
-LABEL_COLUMN = 'label'
+    def fit(self, X, y=None):
+        X = np.asarray(X)
+        # compute per-feature quantiles (axis=0)
+        self.lower_ = np.quantile(X, self.lower_q, axis=0)
+        self.upper_ = np.quantile(X, self.upper_q, axis=0)
+        return self
+
+    def transform(self, X):
+        X = np.asarray(X)
+        # broadcast clip bounds across rows
+        return np.clip(X, self.lower_, self.upper_)
 
 num_transformer = Pipeline(
   [
-    ("imputer", SimpleImputer(missing_values=np.nan, strategy="constant", fill_value=-1)),
+    ("imputer", SimpleImputer(missing_values=np.nan, strategy="constant", fill_value=0)),
+    ("clipper", QuantileClipper(lower_q=0.0, upper_q=0.999)),
     ("scalar", StandardScaler())
   ]
 )
@@ -110,19 +139,19 @@ cat_transformer = Pipeline(
 
 preprocessor = ColumnTransformer(
     [("numeric", num_transformer, NUMERIC_COLUMNS),
-    ("categorical", cat_transformer, ONE_HOT_COLUMNS)],
-    remainder='passthrough'
+    ("categorical", cat_transformer, ONE_HOT_COLUMNS)]
 )
+
 
 def process_data(df, using_train_data):
     tmp_df = df[ONE_HOT_COLUMNS + NUMERIC_COLUMNS]
     # fit only on training data
     # only transforming for val and test data
     if using_train_data:
-        X = preprocessor.fit_transform(tmp_df)
+        x = preprocessor.fit_transform(tmp_df)
     else:
-        X = preprocessor.transform(tmp_df)
+        x = preprocessor.transform(tmp_df)
 
     y = np.where(df[LABEL_COLUMN] == 'Benign', 0, 1)
     y = y.reshape(-1, 1)
-    return X, y
+    return x, y

@@ -59,8 +59,7 @@ class Trainer:
         out_dir = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "results",
-            model_name,
-            datetime.now().strftime("%Y-%m-%d-%H-%M")
+            model_name
         )
         out_path = Path(out_dir)
         out_path.mkdir(parents=True, exist_ok=True)
@@ -80,11 +79,11 @@ class Trainer:
         )
         self.logger = logging.getLogger(__name__)
 
-    def train(self, train_dataloader: DataLoader, val_dataloader: DataLoader) -> None:
+    def train(self, train_dataloader: DataLoader, val_dataloader: DataLoader, val_dataset) -> None:
 
         # early stopping configs 
         early_stopping_patience = 3
-        best_val_loss = float('inf')
+        best_val_acc = 0
         early_stopping_counter = 0
         best_model_state = None
 
@@ -93,6 +92,7 @@ class Trainer:
 
             # loss tracking metrics
             running_loss = 0.0
+            running_vloss = 0.0
             batch_loss = 0.0
             running_acc = 0.0
 
@@ -113,6 +113,8 @@ class Trainer:
 
                 # perform backpropagation
                 loss.backward()  # compute gradients
+
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 self.optimizer.step()  # update model parameters
 
                 # gather data and report
@@ -132,12 +134,12 @@ class Trainer:
             if epoch % self.check_val_every_n_epoch == 0:
                 self.model.eval()  # set model to evaluation
                 with torch.no_grad():
-                    running_vloss = 0.0
                     running_val_acc = 0
                     for inputs, labels in val_dataloader:
                         inputs, labels = inputs.to(self.device), labels.to(self.device)
 
                         outputs = self.model(inputs)
+                        outputs = outputs.clamp(min=-50, max=50)
                         loss = self.criterion(outputs, labels)
 
                         running_vloss += loss.item()
@@ -154,9 +156,42 @@ class Trainer:
                     f"[EPOCH {epoch + 1}] LOSS : train={avg_loss} val={avg_vloss} | ACCURACY : train={train_accuracy} val={val_accuracy}"
                 )
 
+                # crit_debug = torch.nn.BCEWithLogitsLoss(reduction="none")
+
+                # self.model.eval()
+                # with torch.no_grad():
+                #     all_losses = []
+                #     all_logits = []
+                #     all_labels = []
+
+                #     for inputs, labels in val_dataloader:
+                #         inputs, labels = inputs.to(self.device), labels.to(self.device).float()
+                #         logits = self.model(inputs).view(-1)
+                #         labels = labels.view(-1)
+                #         per_item = crit_debug(logits, labels)
+
+                #         all_losses.append(per_item.cpu())
+                #         all_logits.append(logits.cpu())
+                #         all_labels.append(labels.cpu())
+
+                # all_losses = torch.cat(all_losses)
+                # all_logits = torch.cat(all_logits)
+                # all_labels = torch.cat(all_labels)
+
+                # topk_vals, topk_idx = torch.topk(all_losses, k=20)
+                # topk_idx = topk_idx.tolist()
+
+                # for i in topk_idx:
+                #     x_i, y_i = val_dataset[i]  # adjust for your dataset type
+                #     print("Index:", i)
+                #     print("Label:", y_i)
+                #     print("Features:", x_i)
+                #     print("Feature max abs:", x_i.abs().max())
+                #     print("-" * 40)
+
                 # Early stopping check
-                if avg_vloss < best_val_loss:
-                    best_val_loss = avg_vloss
+                if val_accuracy > best_val_acc:
+                    best_val_acc = val_accuracy
                     early_stopping_counter = 0
                     # Save best model state
                     best_model_state = copy.deepcopy(self.model.state_dict())
@@ -164,8 +199,8 @@ class Trainer:
                     early_stopping_counter += 1
                     if early_stopping_counter >= early_stopping_patience:
                         self.logger.info(
-                            f"Early stopping triggered! No improvement in val_loss "
-                            f"for {early_stopping_patience} epochs. Best val_loss: {best_val_loss:.6f}"
+                            f"Early stopping triggered! No improvement in val_acc "
+                            f"for {early_stopping_patience} epochs. Best val_acc: {best_val_acc:.6f}"
                         )
                         # Restore best model weights
                         if best_model_state is not None:
@@ -175,7 +210,7 @@ class Trainer:
         # Restore best model weights at the end of training
         if best_model_state is not None:
             self.model.load_state_dict(best_model_state)
-            self.logger.info(f"Restored best model weights with val_loss={best_val_loss:.6f}")
+            self.logger.info(f"Restored best model weights with val_acc={best_val_acc:.6f}")
 
     def test(self, test_dataloader: DataLoader) -> float:
         correct = 0

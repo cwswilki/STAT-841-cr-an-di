@@ -15,10 +15,14 @@ from dataset import MalwareDatasetLoader, MalwareDataset, process_data
 CACHE_PATH = "neuralnets/cache/"
 CACHE_DATA_PATH = os.path.join(CACHE_PATH, "data.npz")
 
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Train DNN for malware detection")
 
+    parser.add_argument(
+        "--run",
+        type=str,
+        required=True,
+    )
     parser.add_argument(
         "--learning-rates",
         type=float,
@@ -119,7 +123,7 @@ def main():
     BATCH_SIZE = args.batch_size
 
     # Datasets / Dataloaders
-    train_ds = MalwareDataset(X_train[:600000], y_train[:600000])
+    train_ds = MalwareDataset(X_train, y_train)
     val_ds = MalwareDataset(X_val, y_val)
     test_ds = MalwareDataset(X_test, y_test)
 
@@ -129,10 +133,10 @@ def main():
 
     device = get_device()
 
-    # # Positive weight for class imbalance
-    # num_neg = np.sum(y_train == 0)
-    # num_pos = np.sum(y_train == 1)
-    # pos_weight = torch.tensor([num_neg / num_pos]).to(device)
+    # Positive weight for class imbalance
+    num_neg = np.sum(y_train == 0)
+    num_pos = np.sum(y_train == 1)
+    pos_weight = torch.tensor([num_neg / num_pos]).to(device)
 
     model_results = []
 
@@ -149,20 +153,19 @@ def main():
         else:  # adam
             optimizer = optim.Adam(model.parameters(), lr=lr)
 
-        model_name = f"DNN(hidden={'-'.join([str(h) for h in args.layers])}, dropout={args.dropout}, lr={lr})"
         trainer = Trainer(
             model=model,
-            model_name=model_name,
+            model_name=args.run,
             optimizer=optimizer,
             batch_size=BATCH_SIZE,
             learning_rate=lr,
             num_epochs=args.num_epochs,
             check_val_every_n_epoch=args.check_val_every_n_epoch,
             device=device,
-            pos_weight=None
+            pos_weight=pos_weight
         )
 
-        trainer.logger.info(f"\n##### Model: {model_name} #####")
+        trainer.logger.info(f"\n##### Model ({args.run}) #####")
         trainer.logger.info(f"Learning Rate: {lr}")
         trainer.logger.info(f"Optimizer: {args.optimizer}")
         trainer.logger.info(f"Hidden Layers: {args.layers}")
@@ -170,7 +173,7 @@ def main():
         trainer.logger.info(f"Num Epochs: {args.num_epochs}")
         trainer.logger.info(f"Dropout: {args.dropout}")
 
-        trainer.train(train_dataloader, val_dataloader)
+        trainer.train(train_dataloader, val_dataloader, val_ds)
         test_acc = trainer.test(test_dataloader)
         trainer.plot_metrics()
 
@@ -181,7 +184,7 @@ def main():
             torch.cuda.empty_cache()
 
     best_lr, best_acc = max(model_results, key=lambda x: x[1])
-    print(f"\nBest lr for {model_name}: {best_lr} (test acc = {best_acc})")
+    print(f"\nBest lr={best_lr} (test acc = {best_acc})")
 
 
 if __name__ == "__main__":
