@@ -1,5 +1,8 @@
 import argparse
 import os
+import sys
+import logging
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -138,6 +141,26 @@ def main():
     num_pos = np.sum(y_train == 1)
     pos_weight = torch.tensor([num_neg / num_pos]).to(device)
 
+    # Setup logger
+    out_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "results",
+        args.run
+    )
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    log_file = out_path / "train.log"
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s | %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(log_file, mode="w"),
+        ],
+    )
+    logger = logging.getLogger(__name__)
+
     model_results = []
 
     for lr in args.learning_rates:
@@ -157,6 +180,7 @@ def main():
             model=model,
             model_name=args.run,
             optimizer=optimizer,
+            logger=logger,
             batch_size=BATCH_SIZE,
             learning_rate=lr,
             num_epochs=args.num_epochs,
@@ -165,13 +189,13 @@ def main():
             pos_weight=pos_weight
         )
 
-        trainer.logger.info(f"\n##### Model ({args.run}) #####")
-        trainer.logger.info(f"Learning Rate: {lr}")
-        trainer.logger.info(f"Optimizer: {args.optimizer}")
-        trainer.logger.info(f"Hidden Layers: {args.layers}")
-        trainer.logger.info(f"Batch Size: {args.batch_size}")
-        trainer.logger.info(f"Num Epochs: {args.num_epochs}")
-        trainer.logger.info(f"Dropout: {args.dropout}")
+        logger.info(f"\n##### Model ({args.run}) #####")
+        logger.info(f"Learning Rate: {lr}")
+        logger.info(f"Optimizer: {args.optimizer}")
+        logger.info(f"Hidden Layers: {args.layers}")
+        logger.info(f"Batch Size: {args.batch_size}")
+        logger.info(f"Num Epochs: {args.num_epochs}")
+        logger.info(f"Dropout: {args.dropout}")
 
         trainer.train(train_dataloader, val_dataloader, val_ds)
         test_acc = trainer.test(test_dataloader)
@@ -184,7 +208,7 @@ def main():
             torch.cuda.empty_cache()
 
     best_lr, best_acc = max(model_results, key=lambda x: x[1])
-    print(f"\nBest lr={best_lr} (test acc = {best_acc})")
+    logger.info(f"\nBest lr={best_lr} (test acc = {best_acc})")
 
 
 if __name__ == "__main__":
