@@ -2,17 +2,24 @@ import sys, os
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import logging
+import copy
+from pathlib import Path
+from datetime import datetime
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
+from typing import Optional
+import numpy as np
+
 
 class Trainer:
     def __init__(
         self,
         model: nn.Module,
+        model_name: str,
         optimizer: optim.Optimizer,
         batch_size: int = 256,
         learning_rate: float = 0.01,
@@ -20,6 +27,7 @@ class Trainer:
         check_val_every_n_epoch: int = 1,
         device: torch.device = torch.device("cpu"),
         threshold: float = 0.5,
+        pos_weight: Optional[np.ndarray] = None,
     ) -> None:
         """Trainer object to facilitate training and evaluation"""
 
@@ -35,14 +43,12 @@ class Trainer:
         self.model.to(self.device)
 
         # set loss function and optimizer
-        self.criterion = nn.BCEWithLogitsLoss()
+        self.criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
         self.optimizer = optimizer
         self.optimizer_name = self.optimizer.__class__.__name__
-            
-        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=7, gamma=0.1)
 
-        self.model_name = f"DNN (lr={self.learning_rate}, bs={self.batch_size}, loss={self.optimizer_name}, threshold={self.threshold})"
+        self.model_name = model_name
 
         # model metrics
         self.train_losses = []
@@ -50,19 +56,43 @@ class Trainer:
         self.val_losses = []
         self.val_accuracies = []
 
-        # logging info
-        logging.basicConfig(stream=sys.stdout, level=logging.INFO, format="%(levelname)s | %(message)s")
-        self.logger = logging.getLogger()
+        out_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "results",
+            model_name,
+            datetime.now().strftime("%Y-%m-%d-%H-%M")
+        )
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+        log_file = out_path / "train.log"
+
+        # plots/ subfolder
+        self.plots_dir = out_path / "plots"
+        self.plots_dir.mkdir(parents=True, exist_ok=True)
+
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(levelname)s | %(message)s",
+            handlers=[
+                logging.StreamHandler(sys.stdout),
+                logging.FileHandler(log_file, mode="w"),
+            ],
+        )
+        self.logger = logging.getLogger(__name__)
 
     def train(self, train_dataloader: DataLoader, val_dataloader: DataLoader) -> None:
-        """Train the ResNet-18 Model"""
+
+        # early stopping configs 
+        early_stopping_patience = 3
+        best_val_loss = float('inf')
+        early_stopping_counter = 0
+        best_model_state = None
 
         for epoch in range(self.num_epochs):
             self.model.train()  # set model to train
 
             # loss tracking metrics
             running_loss = 0.0
-            running_vloss = 0.0
             batch_loss = 0.0
             running_acc = 0.0
 
@@ -93,8 +123,6 @@ class Trainer:
                     pbar.set_postfix({"loss": round(batch_loss, 5)})
                     batch_loss = 0.0
 
-            self.scheduler.step()
-
             train_accuracy = running_acc / len(train_dataloader)
             self.train_accuracies.append((epoch, train_accuracy))
 
@@ -104,6 +132,7 @@ class Trainer:
             if epoch % self.check_val_every_n_epoch == 0:
                 self.model.eval()  # set model to evaluation
                 with torch.no_grad():
+                    running_vloss = 0.0
                     running_val_acc = 0
                     for inputs, labels in val_dataloader:
                         inputs, labels = inputs.to(self.device), labels.to(self.device)
@@ -125,9 +154,30 @@ class Trainer:
                     f"[EPOCH {epoch + 1}] LOSS : train={avg_loss} val={avg_vloss} | ACCURACY : train={train_accuracy} val={val_accuracy}"
                 )
 
-    def test(self, test_dataloader: DataLoader) -> float:
-        """Test the ResNet-18 Model"""
+                # Early stopping check
+                if avg_vloss < best_val_loss:
+                    best_val_loss = avg_vloss
+                    early_stopping_counter = 0
+                    # Save best model state
+                    best_model_state = copy.deepcopy(self.model.state_dict())
+                else:
+                    early_stopping_counter += 1
+                    if early_stopping_counter >= early_stopping_patience:
+                        self.logger.info(
+                            f"Early stopping triggered! No improvement in val_loss "
+                            f"for {early_stopping_patience} epochs. Best val_loss: {best_val_loss:.6f}"
+                        )
+                        # Restore best model weights
+                        if best_model_state is not None:
+                            self.model.load_state_dict(best_model_state)
+                        break
+        
+        # Restore best model weights at the end of training
+        if best_model_state is not None:
+            self.model.load_state_dict(best_model_state)
+            self.logger.info(f"Restored best model weights with val_loss={best_val_loss:.6f}")
 
+    def test(self, test_dataloader: DataLoader) -> float:
         correct = 0
         self.model.eval()
         with torch.no_grad():
@@ -140,10 +190,6 @@ class Trainer:
         return correct / len(test_dataloader)
 
     def plot_metrics(self) -> None:
-        """Create plots for model metrics"""
-
-        os.makedirs("neuralnets/plots", exist_ok=True)  # create plots dir
-
         t_iters, t_loss = list(zip(*self.train_losses))
         v_iters, v_loss = list(zip(*self.val_losses))
         _, acc = list(zip(*self.train_accuracies))
@@ -168,7 +214,8 @@ class Trainer:
         ax[1].legend(["Train", "Validation"])
         ax[1].set_xticks(t_iters)
 
-        fig.savefig(f"neuralnets/plots/{self.model_name}_metrics.png")
+        plot_path = self.plots_dir / f"{self.model_name}_metrics.png"
+        fig.savefig(plot_path)
         plt.show()
 
     def __accuracy(self, outputs: torch.Tensor, labels: torch.Tensor) -> float:
