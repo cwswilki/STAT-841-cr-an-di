@@ -1,142 +1,215 @@
-from data.dataset import MalwareDatasetLoader, MalwareDataset
-import pandas as pd
-import numpy as np
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.pipeline import Pipeline
-from sklearn.impute import SimpleImputer
-from torch.utils.data import DataLoader
+import argparse
+import os
+import sys
+import logging
+from pathlib import Path
 
+import numpy as np
 import torch
 import torch.optim as optim
-import multiprocessing
-import concurrent
+from torch.utils.data import DataLoader
 
-from neuralnets.model import DNN
-from neuralnets.trainer import Trainer
+from model import DNN
+from trainer import Trainer
+from helpers import get_device
+from dataset import MalwareDatasetLoader, MalwareDataset, process_data
 
-loader = MalwareDatasetLoader()
-df_train, df_val, df_test = loader.make_data_splits()
 
-# local_orig, local_resp have only "-"" values
-SKIPPED_COLUMNS = [
-  'ts', 'uid', 'id.orig_h', 'id.resp_h', 'tunnel_parents', 'detailed-label', 'id.orig_p', 'id.resp_p', 'local_orig', 'local_resp']
+CACHE_PATH = "neuralnets/cache/"
+CACHE_DATA_PATH = os.path.join(CACHE_PATH, "data.npz")
 
-ONE_HOT_COLUMNS = ['proto', 'service', 'conn_state', 'history']
-NUMERIC_COLUMNS = [
-   'duration', 'orig_bytes', 'resp_bytes', 'missed_bytes', 'orig_pkts', 'orig_ip_bytes', 'resp_pkts', 'resp_ip_bytes'
-]
-LABEL_COLUMN = 'label'
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train DNN for malware detection")
 
-num_transformer = Pipeline(
-  [
-    ("imputer", SimpleImputer(missing_values=np.nan, strategy="constant", fill_value=-1)),
-    ("scalar", StandardScaler())
-  ]
-)
-cat_transformer = Pipeline(
-  [
-    ("imputer", SimpleImputer(missing_values=np.nan, strategy="most_frequent")),
-    ("encoder", OneHotEncoder(handle_unknown='ignore', sparse_output=False))
-  ]
-)
+    parser.add_argument(
+        "--run",
+        type=str,
+        required=True,
+    )
+    parser.add_argument(
+        "--learning-rates",
+        type=float,
+        nargs="+",
+        required=True,
+        help="List of learning rates, e.g. --learning-rates 0.01 0.001",
+    )
+    parser.add_argument(
+        "--optimizer",
+        type=str,
+        choices=["sgd", "adam"],
+        required=True,
+        help="Optimizer to use: sgd or adam",
+    )
+    parser.add_argument(
+        "--layers",
+        type=int,
+        nargs="+",
+        required=True,
+        help="Hidden layer sizes, e.g. --layers 512 256",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        required=True,
+        help="Batch size for training, e.g. --batch-size 512",
+    )
+    parser.add_argument(
+        "--num-epochs",
+        type=int,
+        default=30,
+        help="Number of training epochs",
+    )
+    parser.add_argument(
+        "--check-val-every-n-epoch",
+        type=int,
+        default=5,
+        help="Run validation every N epochs",
+    )
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=0.5,
+        help="Dropout rate (default=0.5)",
+    )
 
-preprocessor = ColumnTransformer(
-    [("numeric", num_transformer, NUMERIC_COLUMNS),
-    ("categorical", cat_transformer, ONE_HOT_COLUMNS)],
-    remainder='passthrough'
-)
+    return parser.parse_args()
 
-def process_data(df, using_train_data):
-    tmp_df = df[ONE_HOT_COLUMNS + NUMERIC_COLUMNS]
-    # fit only on training data
-    # only transforming for val and test data
-    if using_train_data:
-        X = preprocessor.fit_transform(tmp_df)
+
+def main():
+    args = parse_args()
+
+    # === Data loading / preprocessing (with cache) ===
+    if os.path.exists(CACHE_DATA_PATH):
+        print("Loading cached transformed data...")
+        data = np.load(CACHE_DATA_PATH)
+        X_train, y_train = data["X_train"], data["y_train"]
+        X_val, y_val = data["X_val"], data["y_val"]
+        X_test, y_test = data["X_test"], data["y_test"]
     else:
-        X = preprocessor.transform(tmp_df)
+        os.makedirs(CACHE_PATH, exist_ok=True)
+        loader = MalwareDatasetLoader()
+        df_train, df_val, df_test = loader.make_data_splits()
 
-    y = np.where(df[LABEL_COLUMN] == 'Benign', 1, 0)
-    y = y.reshape(-1, 1)
-    return X, y
+        X_train, y_train = process_data(df_train, using_train_data=True)
+        X_val, y_val = process_data(df_val, using_train_data=False)
+        X_test, y_test = process_data(df_test, using_train_data=False)
 
-X_train, y_train = process_data(df_train, using_train_data=True)
-X_val, y_val = process_data(df_val, using_train_data=False)
-X_test, y_test = process_data(df_test, using_train_data=False)
+        np.savez(
+            CACHE_DATA_PATH,
+            X_train=X_train,
+            y_train=y_train,
+            X_val=X_val,
+            y_val=y_val,
+            X_test=X_test,
+            y_test=y_test,
+        )
 
-print(X_train.shape, y_train.shape)
-print(X_val.shape, y_val.shape)
-print(X_test.shape, y_test.shape)
+    # Data sizes
+    print(X_train.shape, y_train.shape)
+    print(X_val.shape, y_val.shape)
+    print(X_test.shape, y_test.shape)
 
-IN_FEATURES = X_train.shape[1]
-train_ds = MalwareDataset(X_train, y_train)
-val_ds = MalwareDataset(X_val, y_val)
-test_ds = MalwareDataset(X_test, y_test)
+    # Class distribution
+    print(
+        f"\nClass distribution - Train: Benign={np.sum(y_train == 0) / len(y_train):.2%}, "
+        f"Malware={np.sum(y_train == 1) / len(y_train):.2%}"
+    )
+    print(
+        f"Class distribution - Val: Benign={np.sum(y_val == 0) / len(y_val):.2%}, "
+        f"Malware={np.sum(y_val == 1) / len(y_val):.2%}"
+    )
+    print(
+        f"Class distribution - Test: Benign={np.sum(y_test == 0) / len(y_test):.2%}, "
+        f"Malware={np.sum(y_test == 1) / len(y_test):.2%}\n"
+    )
 
-del loader 
-del df_test, df_val, df_train
-del X_train, y_train, X_val, y_val, X_test, y_test
-import gc
-gc.collect()
+    BATCH_SIZE = args.batch_size
 
-BATCH_SIZE = 1024*64
+    # Datasets / Dataloaders
+    train_ds = MalwareDataset(X_train, y_train)
+    val_ds = MalwareDataset(X_val, y_val)
+    test_ds = MalwareDataset(X_test, y_test)
 
-train_dataloader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, pin_memory=True)
-val_dataloader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
-test_dataloader = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False)
+    train_dataloader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
+    val_dataloader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
+    test_dataloader = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False)
 
-if torch.cuda.is_available():
-   multiprocessing.set_start_method('spawn', force=True)
-   print("Multiprocessing start method set to 'spawn' for CUDA compatibility.")
+    device = get_device()
 
-PARALLEL=True
-NUM_WORKERS = 6
-accuracies = []
-futures = []
-with concurrent.futures.ProcessPoolExecutor(max_workers=NUM_WORKERS) as executor:
-    for initial_lr in [1, 1e-1, 1e-3, 1e-5]:
-        for weight_decay in [0, 0.0001, 0.001, 0.01, 0.1]:
-            for dropout in [0, 0.1, 0.5]:
-                for optim_type in ["adamw", "sgd"]:
-                    for activation_type in ["sigmoid", "relu"]:
-                        for layers in [[512 for _ in range(12)], [512], [512, 256], ]:
-                            if optim_type == "sgd" and weight_decay != 0:
-                                continue
-                            desc = (f"Optimizer: {optim_type} - Weight Decay: {weight_decay} - Dropout: {dropout}"
-                                 f" - initial LR: {initial_lr} - act: {activation_type} - layers: {layers}")
-                            print(f"SCHEDULING: {desc}")
-                            if PARALLEL:
-                                futures.append(executor.submit(training_run,
-                                                               IN_FEATURES,
-                                                               BATCH_SIZE,
-                                                               train_dataloader,
-                                                               val_dataloader,
-                                                               test_dataloader,
-                                                               weight_decay, dropout, initial_lr,
-                                                optim_type, activation_type, layers, log_progress=False,
-                                                ))
-                            else:
-                                result = training_run(IN_FEATURES,
-                                                      BATCH_SIZE,
-                                                            train_dataloader,
-                                                            val_dataloader,
-                                                             test_dataloader,
-                                                            weight_decay, dropout, initial_lr, optim_type,
-                                    activation_type, layers)
-                                accuracies.append(result)
+    # Positive weight for class imbalance
+    num_neg = np.sum(y_train == 0)
+    num_pos = np.sum(y_train == 1)
+    pos_weight = torch.tensor([num_neg / num_pos]).to(device)
 
-CATCH_EXCEPTIONS=False
-if CATCH_EXCEPTIONS:
-    for future in concurrent.futures.as_completed(futures):
-        try:
-            result = future.result()
-            print(f"FINISHED RESULT: {result}")
-            if result is not None:
-                accuracies.append(result)
-        except Exception as e:
-            print(e)
-else:
-    for future in concurrent.futures.as_completed(futures):
-        result = future.result()
-        if result is not None:
-            accuracies.append(result)
+    # Setup logger
+    out_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "results",
+        args.run
+    )
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    log_file = out_path / "train.log"
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s | %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(log_file, mode="w"),
+        ],
+    )
+    logger = logging.getLogger(__name__)
+
+    model_results = []
+
+    for lr in args.learning_rates:
+        model = DNN(
+            input_dim=X_train.shape[1],
+            hidden_dims=args.layers,
+            output_dim=1,
+            dropout=args.dropout,
+        ).to(device)
+
+        if args.optimizer.lower() == "sgd":
+            optimizer = optim.SGD(model.parameters(), lr=lr)
+        else:  # adam
+            optimizer = optim.Adam(model.parameters(), lr=lr)
+
+        trainer = Trainer(
+            model=model,
+            model_name=args.run,
+            optimizer=optimizer,
+            logger=logger,
+            batch_size=BATCH_SIZE,
+            learning_rate=lr,
+            num_epochs=args.num_epochs,
+            check_val_every_n_epoch=args.check_val_every_n_epoch,
+            device=device,
+            pos_weight=pos_weight
+        )
+
+        logger.info(f"\n##### Model ({args.run}) #####")
+        logger.info(f"Learning Rate: {lr}")
+        logger.info(f"Optimizer: {args.optimizer}")
+        logger.info(f"Hidden Layers: {args.layers}")
+        logger.info(f"Batch Size: {args.batch_size}")
+        logger.info(f"Num Epochs: {args.num_epochs}")
+        logger.info(f"Dropout: {args.dropout}")
+
+        trainer.train(train_dataloader, val_dataloader, val_ds)
+        test_acc = trainer.test(test_dataloader)
+        trainer.plot_metrics()
+
+        model_results.append((lr, test_acc))
+
+        del model, optimizer, trainer
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
+    best_lr, best_acc = max(model_results, key=lambda x: x[1])
+    logger.info(f"\nBest lr={best_lr} (test acc = {best_acc})")
+
+
+if __name__ == "__main__":
+    main()
