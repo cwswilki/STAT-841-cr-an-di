@@ -30,7 +30,7 @@ def training_run(input_dim,
                  layers: list[int],
                  log_progress=True):
     desc = (f"Optimizer: {optim_type} - Weight Decay: {weight_decay} - Dropout: {dropout}"
-        f" - initial LR: {initial_lr} - act: {activation_type} - layers: {layers}")
+        f" - initial LR: {initial_lr} - act: {activation_type} - layers: {layers} - batch_size:{batch_size}")
     print(f"Starting: {desc}")
 
     model = DNN(input_dim=input_dim, hidden_dims=layers, output_dim=1, dropout=dropout, activation_type=activation_type)
@@ -39,9 +39,9 @@ def training_run(input_dim,
     model = model.to(device)
 
     if optim_type == "sgd":
-        optimizer = optim.AdamW(model.parameters(), lr=initial_lr, betas=(0.9, 0.999), eps=1e-9, weight_decay=weight_decay) # optimizer
-    else:
         optimizer = optim.SGD(model.parameters(), lr=initial_lr) # optimizer
+    else:
+        optimizer = optim.AdamW(model.parameters(), lr=initial_lr, betas=(0.9, 0.999), eps=1e-9, weight_decay=weight_decay) # optimizer
         
     epochs = 10
 

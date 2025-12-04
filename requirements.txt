@@ -22,3 +22,4 @@ ipykernel
 
 kagglehub
 scikit-learn
+xgboost
