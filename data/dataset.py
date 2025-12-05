@@ -6,6 +6,15 @@ import pandas as pd
 import pandas as pd
 import numpy as np
 
+# local_orig, local_resp have only "-"" values
+SKIPPED_COLUMNS = [
+  'ts', 'uid', 'id.orig_h', 'id.resp_h', 'tunnel_parents', 'detailed-label', 'id.orig_p', 'id.resp_p', 'local_orig', 'local_resp']
+
+ONE_HOT_COLUMNS = ['proto', 'service', 'conn_state']# 'history']
+NUMERIC_COLUMNS = [
+   'id.orig_p', 'id.resp_p', 'duration', 'orig_bytes', 'resp_bytes', 'missed_bytes', 'orig_pkts', 'orig_ip_bytes', 'resp_pkts', 'resp_ip_bytes'
+]
+LABEL_COLUMN = 'label'
 
 class MalwareDatasetLoader:
 
@@ -24,8 +33,14 @@ class MalwareDatasetLoader:
                 dataframes.append(pd.read_csv(full_path, sep="|"))
 
         df = pd.concat(dataframes, ignore_index=True)
-        df = df.replace("-", np.nan)
 
+        # convert to numeric
+        # [duration, orig_bytes, resp_bytes] are objects we need to convert to numeric
+        for col in NUMERIC_COLUMNS:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+            df[col] = df[col].fillna(-1)
+
+        df = df[NUMERIC_COLUMNS + ONE_HOT_COLUMNS + [LABEL_COLUMN]]
         self.df = df
 
     def make_data_splits(
